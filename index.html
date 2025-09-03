@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Monsters & Memories — Quest Log (GitHub-connected)</title>
+<title>Monsters & Memories — Quest Log (GitHub Save: strict)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root{
@@ -61,7 +61,7 @@
   /* Main area */
   .main{padding:8px 16px 16px; overflow:auto; display:flex; flex-direction:column; gap:12px}
   .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:12px}
-  .empty{padding:14px; border:1px dashed var(--border); border-radius:12px; color:var(--muted); text-align:center}
+  .empty{padding:14px; border:1px dashed var(--border); border-radius:12px; color:#aaa; text-align:center}
   .storage-row{display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap}
   .subtle{color:var(--text-dim); font-size:12px; margin-top:6px}
 
@@ -304,8 +304,9 @@ async function ghFetchFile(){
   return { exists:true, content:text };
 }
 async function ghSaveFile(){
-  if(!gh.owner||!gh.repo||!gh.path||!gh.branch) { setGhMsg("Fill owner/repo/branch/path."); return; }
-  if(!gh.token){ setGhMsg("Token required to save to GitHub."); return; }
+  if(!gh.owner||!gh.repo||!gh.path||!gh.branch) throw new Error("Fill owner/repo/branch/path.");
+  if(!gh.token) throw new Error("Token required to save to GitHub.");
+
   const url = `https://api.github.com/repos/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/contents/${gh.path}`;
   const body = {
     message: `Update questlog (${new Date().toLocaleString()})`,
@@ -319,11 +320,9 @@ async function ghSaveFile(){
     "Authorization":"token " + gh.token
   };
   let res = await fetch(url, {method:"PUT", headers, body:JSON.stringify(body)});
-  // If out-of-date SHA, refetch sha then retry once
   if(res.status===409){
     try{
-      await ghFetchFile(); // refresh gh.sha
-      body.sha = gh.sha;
+      await ghFetchFile(); body.sha = gh.sha;
       res = await fetch(url, {method:"PUT", headers, body:JSON.stringify(body)});
     }catch(e){}
   }
@@ -335,41 +334,40 @@ async function ghSaveFile(){
   setGhMsg("Saved to GitHub.");
 }
 
-/* ========= Save hub ========= */
+/* ========= Save hub (strict) ========= */
 async function hardSave(){
-  try{
-    if(gh.connected){
-      await ghSaveFile();
-      return;
-    }
-  }catch(err){
-    setGhMsg(String(err.message||err));
+  // If connected to GitHub, require saving to GitHub (no local fallback)
+  if (gh.connected) {
+    if (!gh.token) { setGhMsg("Token required to save to GitHub."); return; }
+    try { await ghSaveFile(); } catch (err) { setGhMsg(String(err.message || err)); }
+    return;
   }
-  // Fallback: local file or download
-  if(fileHandle && supportsFS && secureOK){
-    try{
-      if(await ensurePermission()){
+
+  // Fallback paths only when NOT connected to GitHub
+  if (fileHandle && supportsFS && secureOK) {
+    try {
+      if (await ensurePermission()) {
         await writeToHandle(fileHandle);
         setStatus(`Saved to: ${fileHandle.name}`); stampSaved("connected file", fileHandle.name);
         return;
       }
-    }catch(e){}
+    } catch (e) {}
   }
-  if(supportsFS && secureOK){
-    try{
-      const handle=await window.showSaveFilePicker({
-        suggestedName:(fileHandle?.name)||"mnm-questlog.json",
-        types:[{ description:"JSON", accept:{ "application/json":[".json"] } }]
+  if (supportsFS && secureOK) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: (fileHandle?.name) || "mnm-questlog.json",
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }]
       });
       await writeToHandle(handle);
-      fileHandle=handle;
+      fileHandle = handle;
       setStatus(`Saved to: ${fileHandle.name}`); stampSaved("Save As", fileHandle.name);
       return;
-    }catch(e){}
+    } catch (e) {}
   }
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob); a.download=(fileHandle?.name)||"mnm-questlog.json"; a.click();
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = (fileHandle?.name) || "mnm-questlog.json"; a.click();
   setStatus("Downloaded JSON"); stampSaved("download");
 }
 
@@ -627,6 +625,17 @@ function readGhForm(){
   gh.path  = el("ghPath").value.trim() || "mnm-questlog.json";
   gh.token = (el("ghToken").value||"").trim() || null;
 }
+function updateSaveButton(){
+  const btn = el("saveBtn");
+  if(!btn) return;
+  if(gh.connected){
+    btn.textContent = gh.token ? "Save to GitHub" : "Save to GitHub (token required)";
+    btn.disabled = !gh.token;
+  }else{
+    btn.textContent = "Save";
+    btn.disabled = false;
+  }
+}
 el("ghConnectBtn").onclick = async ()=>{
   try{
     readGhForm();
@@ -634,9 +643,9 @@ el("ghConnectBtn").onclick = async ()=>{
     setGhMsg("Connecting…");
     const r = await ghFetchFile();
     gh.connected = true;
+    updateSaveButton();
     setStatus(`GitHub: ${gh.owner}/${gh.repo}@${gh.branch}:${gh.path}`);
     if(r.exists && r.content){
-      // load state from file
       try{
         const data=JSON.parse(r.content);
         if(data.tree){ state=data; }
@@ -654,6 +663,7 @@ el("ghConnectBtn").onclick = async ()=>{
     }
   }catch(err){
     gh.connected=false;
+    updateSaveButton();
     setGhMsg(String(err.message||err));
   }
 };
@@ -661,7 +671,12 @@ el("ghDisconnectBtn").onclick = ()=>{
   gh.connected=false; gh.sha=null;
   setStatus("Storage: Local (browser)");
   setGhMsg("Disconnected from GitHub.");
+  updateSaveButton();
 };
+el("ghToken").addEventListener("input",(e)=>{
+  gh.token = (e.target.value||"").trim() || null;
+  updateSaveButton();
+});
 
 el("saveBtn").onclick = ()=>{ hardSave(); };
 window.addEventListener("keydown",(e)=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); hardSave(); }});
@@ -701,8 +716,9 @@ el("exportBtn").onclick = exportJSON;
 el("importFile").onchange = (e)=>{ const f=e.target.files?.[0]; if(!f) return; readAndImportFile(f); };
 el("clearAllBtn").onclick = ()=>{ if(confirm("Clear all data?")){ localStorage.removeItem(STORAGE_KEY); state=load(); save(); render(); } };
 
-// Load any saved GH config
+// Load saved GH config & set initial Save-button state
 loadGhFromLocal();
+updateSaveButton();
 
 /* ============ Add Quest logic (robust) ============ */
 function addQuest(){
