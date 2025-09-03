@@ -1,29 +1,28 @@
 {
   "tree": [
     {
-      "id": "tbl9pcp",
-      "title": "Main Character",
+      "id": "c8bu4v5",
+      "title": "Bard",
       "open": true,
-      "quests": [
+      "quests": [],
+      "children": [
         {
-          "id": "r3e5z7l",
-          "name": "Test 2",
-          "desc": "Test 2",
-          "done": false,
+          "id": "i6mirsy",
+          "title": "Night Harbor/Shaded Dunes",
           "open": true,
-          "editing": false
-        },
-        {
-          "id": "qdkz6fr",
-          "name": "test",
-          "desc": "test 1",
-          "done": false,
-          "open": true,
-          "editing": false
+          "quests": [],
+          "children": [
+            {
+              "id": "h1icx62",
+              "title": "Class Quests",
+              "open": true,
+              "quests": [],
+              "children": []
+            }
+          ]
         }
-      ],
-      "children": []
+      ]
     }
   ],
-  "selectedNodeId": "tbl9pcp"
+  "selectedNodeId": "h1icx62"
 }
