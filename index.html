@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Monsters & Memories — Quest Log (Add Quest Fix + Inline Editor)</title>
+<title>Monsters & Memories — Quest Log (GitHub-connected)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root{
@@ -82,7 +82,7 @@
   .muted{color:var(--text-dim); white-space:pre-wrap; margin:8px 0}
   .stack-h{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end}
 
-  /* Floating inline editor for node titles */
+  /* Floating inline editor for node titles (horizontal) */
   .floating-editor{
     position:fixed; z-index:9999; display:flex; gap:6px; align-items:center;
     background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:6px;
@@ -137,19 +137,42 @@
       <div class="storage-row">
         <div id="fileStatus" class="chip">Storage: Local (browser)</div>
         <div class="stack-h">
-          <button id="connectFileBtn" class="btn main">Connect File</button>
-          <button id="createFileBtn" class="btn secondary">Create File</button>
-          <button id="saveBtn" class="btn success" title="Ctrl/Cmd+S">Save</button>
+          <!-- Local file options kept as fallback -->
+          <button id="connectFileBtn" class="btn secondary" title="Connect a local file (fallback)">Local File</button>
+          <button id="saveBtn" class="btn success" title="Save (Ctrl/Cmd+S)">Save</button>
         </div>
       </div>
       <div id="fsWarning" class="subtle" style="display:none"></div>
       <div id="lastSaved" class="subtle">Last saved: —</div>
     </div>
 
+    <!-- GitHub connection panel -->
+    <details class="tools" open>
+      <summary>GitHub File</summary>
+      <div class="content" style="display:grid; gap:8px">
+        <div style="display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+          <input id="ghOwner" class="input" placeholder="owner (user or org)" />
+          <input id="ghRepo" class="input" placeholder="repo name" />
+          <input id="ghBranch" class="input" placeholder="branch (e.g., main)" value="main" />
+          <input id="ghPath" class="input" placeholder="path/to/questlog.json" value="mnm-questlog.json" />
+          <input id="ghToken" class="input" placeholder="GitHub token (needed to save)" />
+        </div>
+        <label class="subtle" style="display:flex; align-items:center; gap:8px">
+          <input id="ghRemember" type="checkbox" />
+          Remember token locally (browser storage)
+        </label>
+        <div class="stack-h">
+          <button id="ghConnectBtn" class="btn main">Connect GitHub</button>
+          <button id="ghDisconnectBtn" class="btn secondary">Disconnect</button>
+        </div>
+        <div id="ghMsg" class="subtle"></div>
+      </div>
+    </details>
+
     <div id="crumb" class="card">No node selected</div>
 
     <div class="grid-2">
-      <!-- Add Quest (form-based, robust) -->
+      <!-- Add Quest -->
       <details class="add" open>
         <summary>Add Quest</summary>
         <div class="content">
@@ -190,38 +213,167 @@
 /* ================== Core state ================== */
 const STORAGE_KEY="mnm_tree_questlog_v1";
 const SIDEBAR_KEY="mnm_sidebar_collapsed";
+const GH_CFG_KEY="mnm_gh_cfg_v1";
+const GH_TOKEN_KEY="mnm_gh_token_v1";
 
 let state = load();
 let fileHandle = null;
+
+/* GitHub connection state */
+let gh = {
+  owner:"", repo:"", branch:"main", path:"mnm-questlog.json",
+  token:null, sha:null, connected:false
+};
 
 const supportsFS = !!(window.showOpenFilePicker && window.showSaveFilePicker);
 const secureOK = window.isSecureContext || location.protocol==="https:" || location.hostname==="localhost";
 const el = (id)=>document.getElementById(id);
 
-/* ================== Defaults ================== */
-function defaultState(){
-  const rootId = uid();
-  return { tree: [{ id:rootId, title:"Main Character", open:true, quests:[], children:[] }], selectedNodeId: rootId };
-}
+/* ========= Utils ========= */
 function uid(){ return Math.random().toString(36).slice(2,9); }
+function encodeB64(str){ return btoa(unescape(encodeURIComponent(str))); }
+function decodeB64(str){ return decodeURIComponent(escape(atob(str))); }
 
-/* ================== Persistence ================== */
+/* ========= Persistence ========= */
 function save(data=state){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
-function load(){ try{ const raw=localStorage.getItem(STORAGE_KEY); if(raw){ const s=JSON.parse(raw); if(s.tree) return s; } }catch{} return defaultState(); }
+function load(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(raw){ const s=JSON.parse(raw); if(s.tree) return s; }
+  }catch{}
+  const rootId=uid();
+  return { tree:[{id:rootId,title:"Main Character",open:true,quests:[],children:[]}], selectedNodeId:rootId };
+}
 function setStatus(msg){ el("fileStatus").textContent = msg; }
+function setGhMsg(s){ el("ghMsg").textContent = s||""; }
 function warnFS(msg){ const w=el("fsWarning"); w.textContent=msg; w.style.display=msg? "block":"none"; }
 function stampSaved(method, name){ const ts=new Date().toLocaleString(); el("lastSaved").textContent = `Last saved: ${ts} via ${method}${name?` (${name})`:""}`; }
 
-/* ================== File helpers ================== */
-async function ensurePermission(){ if(!fileHandle) return false; let p=await fileHandle.queryPermission({mode:'readwrite'}); if(p==='prompt') p=await fileHandle.requestPermission({mode:'readwrite'}); return p==='granted'; }
-async function writeToHandle(handle){ const w=await handle.createWritable(); await w.write(JSON.stringify(state,null,2)); await w.close(); }
-async function hardSave(){
-  if(fileHandle && supportsFS && secureOK){ try{ if(await ensurePermission()){ await writeToHandle(fileHandle); setStatus(`Saved to: ${fileHandle.name}`); stampSaved("connected file", fileHandle.name); return; } }catch(e){} }
-  if(supportsFS && secureOK){ try{ const handle=await window.showSaveFilePicker({ suggestedName:(fileHandle?.name)||"mnm-questlog.json", types:[{description:"JSON", accept:{ "application/json":[".json"] }}] }); await writeToHandle(handle); fileHandle=handle; setStatus(`Saved to: ${fileHandle.name}`); stampSaved("Save As", fileHandle.name); return; }catch(e){} }
-  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=(fileHandle?.name)||"mnm-questlog.json"; a.click(); setStatus("Downloaded JSON"); stampSaved("download");
+/* ========= Local File (fallback) ========= */
+async function ensurePermission(){
+  if(!fileHandle) return false;
+  let p=await fileHandle.queryPermission({mode:'readwrite'});
+  if(p==='prompt') p=await fileHandle.requestPermission({mode:'readwrite'});
+  return p==='granted';
+}
+async function writeToHandle(handle){
+  const w=await handle.createWritable();
+  await w.write(JSON.stringify(state,null,2));
+  await w.close();
 }
 
-/* ================== Tree helpers ================== */
+/* ========= GitHub API ========= */
+function persistGhToLocal(){
+  const cfg = { owner:gh.owner, repo:gh.repo, branch:gh.branch, path:gh.path };
+  localStorage.setItem(GH_CFG_KEY, JSON.stringify(cfg));
+  const remember = el("ghRemember")?.checked;
+  if(remember && gh.token){ localStorage.setItem(GH_TOKEN_KEY, gh.token); }
+  else { localStorage.removeItem(GH_TOKEN_KEY); }
+}
+function loadGhFromLocal(){
+  try{
+    const cfg = JSON.parse(localStorage.getItem(GH_CFG_KEY)||"{}");
+    gh.owner = cfg.owner||gh.owner;
+    gh.repo  = cfg.repo ||gh.repo;
+    gh.branch= cfg.branch||gh.branch;
+    gh.path  = cfg.path ||gh.path;
+  }catch{}
+  const savedToken = localStorage.getItem(GH_TOKEN_KEY);
+  if(savedToken){ gh.token=savedToken; if(el("ghRemember")) el("ghRemember").checked=true; }
+  // reflect in inputs
+  el("ghOwner").value = gh.owner;
+  el("ghRepo").value  = gh.repo;
+  el("ghBranch").value= gh.branch;
+  el("ghPath").value  = gh.path;
+  el("ghToken").value = gh.token||"";
+}
+async function ghFetchFile(){
+  if(!gh.owner||!gh.repo||!gh.path||!gh.branch){ throw new Error("Missing owner/repo/branch/path"); }
+  const url = `https://api.github.com/repos/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/contents/${gh.path}?ref=${encodeURIComponent(gh.branch)}`;
+  const headers = { "Accept":"application/vnd.github+json" };
+  if(gh.token) headers["Authorization"] = "token " + gh.token;
+  const res = await fetch(url, {headers});
+  if(res.status===404){
+    gh.sha=null; // file doesn't exist yet
+    return { exists:false, content:null };
+  }
+  if(!res.ok){ const t=await res.text(); throw new Error(`GitHub GET failed: ${res.status} ${t}`); }
+  const data = await res.json();
+  gh.sha = data.sha || null;
+  const text = decodeB64(data.content || "");
+  return { exists:true, content:text };
+}
+async function ghSaveFile(){
+  if(!gh.owner||!gh.repo||!gh.path||!gh.branch) { setGhMsg("Fill owner/repo/branch/path."); return; }
+  if(!gh.token){ setGhMsg("Token required to save to GitHub."); return; }
+  const url = `https://api.github.com/repos/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/contents/${gh.path}`;
+  const body = {
+    message: `Update questlog (${new Date().toLocaleString()})`,
+    content: encodeB64(JSON.stringify(state,null,2)),
+    branch: gh.branch
+  };
+  if(gh.sha) body.sha = gh.sha;
+  const headers = {
+    "Accept":"application/vnd.github+json",
+    "Content-Type":"application/json",
+    "Authorization":"token " + gh.token
+  };
+  let res = await fetch(url, {method:"PUT", headers, body:JSON.stringify(body)});
+  // If out-of-date SHA, refetch sha then retry once
+  if(res.status===409){
+    try{
+      await ghFetchFile(); // refresh gh.sha
+      body.sha = gh.sha;
+      res = await fetch(url, {method:"PUT", headers, body:JSON.stringify(body)});
+    }catch(e){}
+  }
+  if(!res.ok){ const t=await res.text(); throw new Error(`GitHub PUT failed: ${res.status} ${t}`); }
+  const data = await res.json();
+  gh.sha = data.content?.sha || gh.sha;
+  setStatus(`GitHub: ${gh.owner}/${gh.repo}@${gh.branch}:${gh.path}`);
+  stampSaved("GitHub", `${gh.owner}/${gh.repo}@${gh.branch}:${gh.path}`);
+  setGhMsg("Saved to GitHub.");
+}
+
+/* ========= Save hub ========= */
+async function hardSave(){
+  try{
+    if(gh.connected){
+      await ghSaveFile();
+      return;
+    }
+  }catch(err){
+    setGhMsg(String(err.message||err));
+  }
+  // Fallback: local file or download
+  if(fileHandle && supportsFS && secureOK){
+    try{
+      if(await ensurePermission()){
+        await writeToHandle(fileHandle);
+        setStatus(`Saved to: ${fileHandle.name}`); stampSaved("connected file", fileHandle.name);
+        return;
+      }
+    }catch(e){}
+  }
+  if(supportsFS && secureOK){
+    try{
+      const handle=await window.showSaveFilePicker({
+        suggestedName:(fileHandle?.name)||"mnm-questlog.json",
+        types:[{ description:"JSON", accept:{ "application/json":[".json"] } }]
+      });
+      await writeToHandle(handle);
+      fileHandle=handle;
+      setStatus(`Saved to: ${fileHandle.name}`); stampSaved("Save As", fileHandle.name);
+      return;
+    }catch(e){}
+  }
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=(fileHandle?.name)||"mnm-questlog.json"; a.click();
+  setStatus("Downloaded JSON"); stampSaved("download");
+}
+
+/* ========= Tree helpers ========= */
 function findNodeAndParent(id){
   function walk(nodes, parent=null, path=[]){
     for(const n of nodes){
@@ -237,7 +389,7 @@ function setOpenRecursive(node, open){ node.open=open; node.children?.forEach(ch
 function expandAll(){ state.tree.forEach(n=>setOpenRecursive(n,true)); save(); renderTree(); }
 function collapseAll(){ state.tree.forEach(n=>setOpenRecursive(n,false)); save(); renderTree(); }
 
-/* ================== Floating inline editor ================== */
+/* ========= Floating inline editor for section titles ========= */
 let floating = null, floatingInput = null, widthMirror = null, editingId = null;
 function ensureMirror(){
   if(!widthMirror){
@@ -287,8 +439,7 @@ function startEditNodeTitle(id){
 
   floatingInput.addEventListener("input", autosizeInput);
   floatingInput.addEventListener("keydown",(e)=>{
-    if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); commitEditNodeTitle(id, floatingInput.value); }
-    if((e.key==="Enter" && (e.ctrlKey||e.metaKey))){ e.preventDefault(); commitEditNodeTitle(id, floatingInput.value); }
+    if(e.key==="Enter"){ e.preventDefault(); commitEditNodeTitle(id, floatingInput.value); }
     if(e.key==="Escape"){ e.preventDefault(); cancelEditNodeTitle(); }
   });
 
@@ -315,7 +466,7 @@ function cancelEditNodeTitle(){
   window.removeEventListener("resize", positionFloating);
 }
 
-/* ================== Render UI ================== */
+/* ========= Render UI ========= */
 function render(){ renderTree(); renderCrumb(); renderQuests(); }
 function renderTree(){
   const host=el("tree"); host.innerHTML="";
@@ -398,7 +549,7 @@ function renderQuests(){
 function commitEdit(q, nextName, nextDesc){ const name=(nextName||"").trim(); const desc=(nextDesc||"").trim(); if(name) q.name=name; q.desc=desc; q.editing=false; q.open=true; save(); render(); }
 function cancelEdit(q){ q.editing=false; save(); renderQuests(); }
 
-/* ================== Node actions ================== */
+/* ========= Node actions ========= */
 function addCharacter(){ const id=uid(); state.tree.push({ id, title:"New Character", open:true, quests:[], children:[] }); state.selectedNodeId=id; save(); render(); startEditNodeTitle(id); }
 function addChild(){ const sel=currentNode(); if(!sel) return alert("Select a node first."); const id=uid(); sel.children=sel.children||[]; sel.open=true; sel.children.push({ id, title:"New Sub-section", open:true, quests:[], children:[] }); state.selectedNodeId=id; save(); render(); startEditNodeTitle(id); }
 function renameNode(){ const sel=currentNode(); if(!sel) return alert("Select a node first."); startEditNodeTitle(sel.id); }
@@ -410,17 +561,17 @@ function deleteNode(){
   save(); render();
 }
 
-/* ================== Import/Export ================== */
+/* ========= Import/Export (manual) ========= */
 function exportJSON(){ const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="mnm-questlog.json"; a.click(); }
 async function readAndImportFile(file){
   const text=await file.text();
   try{
     const data=JSON.parse(text);
     if(Array.isArray(data.tree)){
-      const titles=new Set(state.tree.map(n=>n.title));
-      for(const n of data.tree){ if(!titles.has(n.title)) state.tree.push(n); }
+      state=data;
     }else if(Array.isArray(data.sections)){
-      for(const sec of data.sections){ state.tree.push({ id:uid(), title:sec.title||"Untitled", open:true, quests:sec.quests||[], children:[] }); }
+      state={ tree:data.sections.map(s=>({id:uid(),title:s.title||"Untitled",open:true,quests:s.quests||[],children:[] })), selectedNodeId:null };
+      state.selectedNodeId = state.tree[0]?.id || null;
     }else if(Array.isArray(data.quests)){
       const node=currentNode() || (state.tree[0]??null);
       if(node){ node.quests=node.quests||[]; for(const q of data.quests){ node.quests.push({ id:uid(), name:q.name||q.title||"", desc:q.desc||q.description||"", done:!!q.done, open:false, editing:false }); } }
@@ -435,24 +586,28 @@ async function readAndImportFile(file){
   save(); render();
 }
 
-/* ================== Connect / Create / Save ================== */
+/* ========= Connectors & Buttons ========= */
+// Local file (fallback)
 el("connectFileBtn").onclick=async ()=>{
   let handle=null, file=null;
-  if(supportsFS){ try{ const [h]=await window.showOpenFilePicker({ types:[{ description:"JSON or Text", accept:{ "application/json":[".json"], "text/plain":[".txt"], "application/octet-stream":[".*"] } }], excludeAcceptAllOption:false, multiple:false }); handle=h; file=await h.getFile(); }catch(e){} }
-  if(!file){
-    const input=document.createElement("input"); input.type="file"; input.accept=".json,.txt"; input.style.display="none"; document.body.appendChild(input);
-    const picked=await new Promise(res=>{ input.onchange=()=>res(input.files?.[0]||null); input.click(); });
-    document.body.removeChild(input); if(!picked) return; file=picked;
+  if(supportsFS){
+    try{
+      const [h]=await window.showOpenFilePicker({
+        types:[{ description:"JSON or Text", accept:{ "application/json":[".json"], "text/plain":[".txt"], "application/octet-stream":[".*"] } }],
+        excludeAcceptAllOption:false, multiple:false
+      });
+      handle=h; file=await h.getFile();
+    }catch(e){}
   }
-  const text=await file.text();
-  try{
-    const data=text.trim()? JSON.parse(text) : {tree:[]};
-    if(Array.isArray(data.tree)) state=data;
-    else if(Array.isArray(data.sections)){
-      state={ tree:data.sections.map(s=>({id:uid(),title:s.title||"Untitled",open:true,quests:s.quests||[],children:[] })), selectedNodeId:null };
-      state.selectedNodeId = state.tree[0]?.id || null;
-    }else{ await readAndImportFile(new File([text], file.name, {type:file.type})); }
-  }catch{ await readAndImportFile(new File([text], file.name, {type:file.type})); }
+  if(!file){
+    const input=document.createElement("input"); input.type="file"; input.accept=".json,.txt"; input.style.display="none";
+    document.body.appendChild(input);
+    const picked=await new Promise(res=>{ input.onchange=()=>res(input.files?.[0]||null); input.click(); });
+    document.body.removeChild(input);
+    if(!picked) return;
+    file=picked;
+  }
+  await readAndImportFile(file);
   save(); render();
 
   if(handle && supportsFS && secureOK){
@@ -461,30 +616,68 @@ el("connectFileBtn").onclick=async ()=>{
     catch(err){ fileHandle=null; setStatus(`Loaded (read-only): ${file.name}`); warnFS("Could not enable auto-save: " + (err?.message||err)); }
   }else{
     fileHandle=null; setStatus(`Loaded (read-only): ${file.name}`);
-    if(supportsFS && !secureOK){ warnFS("To save back to the file, open via http://localhost or HTTPS."); }
-    else if(!supportsFS){ warnFS("Your browser doesn’t support direct file saving. Use Save (download) or Export."); }
-    else { warnFS(""); }
   }
 };
-el("createFileBtn").onclick=async ()=>{
-  if(!(supportsFS && secureOK)){ warnFS("Use Chrome/Edge/Brave/Opera and open via http://localhost or HTTPS to create & save to files."); return; }
+
+// GitHub panel
+function readGhForm(){
+  gh.owner = el("ghOwner").value.trim();
+  gh.repo  = el("ghRepo").value.trim();
+  gh.branch= el("ghBranch").value.trim() || "main";
+  gh.path  = el("ghPath").value.trim() || "mnm-questlog.json";
+  gh.token = (el("ghToken").value||"").trim() || null;
+}
+el("ghConnectBtn").onclick = async ()=>{
   try{
-    const handle=await window.showSaveFilePicker({ suggestedName:"mnm-questlog.json", types:[{ description:"JSON", accept:{ "application/json":[".json"] } }] });
-    fileHandle=handle; await writeToHandle(fileHandle);
-    setStatus(`Saving to: ${fileHandle.name}`); stampSaved("new file", fileHandle.name); warnFS("");
-  }catch(e){}
+    readGhForm();
+    persistGhToLocal();
+    setGhMsg("Connecting…");
+    const r = await ghFetchFile();
+    gh.connected = true;
+    setStatus(`GitHub: ${gh.owner}/${gh.repo}@${gh.branch}:${gh.path}`);
+    if(r.exists && r.content){
+      // load state from file
+      try{
+        const data=JSON.parse(r.content);
+        if(data.tree){ state=data; }
+        else if(Array.isArray(data.sections)){
+          state={ tree:data.sections.map(s=>({id:uid(),title:s.title||"Untitled",open:true,quests:s.quests||[],children:[] })), selectedNodeId:null };
+          state.selectedNodeId = state.tree[0]?.id || null;
+        }
+        save(); render();
+        setGhMsg("Loaded from GitHub. Saving will commit back to the same file.");
+      }catch{
+        setGhMsg("Connected, but file is not valid JSON. Saving will overwrite with JSON.");
+      }
+    }else{
+      setGhMsg("Connected. File does not exist yet; it will be created on Save.");
+    }
+  }catch(err){
+    gh.connected=false;
+    setGhMsg(String(err.message||err));
+  }
 };
-el("saveBtn").onclick = hardSave;
+el("ghDisconnectBtn").onclick = ()=>{
+  gh.connected=false; gh.sha=null;
+  setStatus("Storage: Local (browser)");
+  setGhMsg("Disconnected from GitHub.");
+};
+
+el("saveBtn").onclick = ()=>{ hardSave(); };
 window.addEventListener("keydown",(e)=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); hardSave(); }});
 
-/* ================== Wiring ================== */
+// Sidebar collapse
 const collapsed = localStorage.getItem(SIDEBAR_KEY)==="1";
 if(collapsed) document.body.classList.add("sidebar-collapsed");
-updateSidebarToggleLabel();
-el("sidebarToggle").onclick=()=>{ document.body.classList.toggle("sidebar-collapsed"); localStorage.setItem(SIDEBAR_KEY, document.body.classList.contains("sidebar-collapsed")?"1":"0"); updateSidebarToggleLabel(); };
 function updateSidebarToggleLabel(){ el("sidebarToggle").textContent = document.body.classList.contains("sidebar-collapsed") ? "▸" : "◂"; }
+updateSidebarToggleLabel();
+el("sidebarToggle").onclick=()=>{
+  document.body.classList.toggle("sidebar-collapsed");
+  localStorage.setItem(SIDEBAR_KEY, document.body.classList.contains("sidebar-collapsed")?"1":"0");
+  updateSidebarToggleLabel();
+};
 
-/* Buttons */
+// Tree buttons
 el("expandAllBtn").onclick = expandAll;
 el("collapseAllBtn").onclick = collapseAll;
 el("addCharacterBtn").onclick = addCharacter;
@@ -492,20 +685,24 @@ el("addChildBtn").onclick = addChild;
 el("renameNodeBtn").onclick = renameNode;
 el("deleteNodeBtn").onclick = deleteNode;
 
-/* Add Quest handlers (click + form submit + Ctrl/Cmd+Enter in description) */
+// Add Quest handlers
 el("addQuestForm").addEventListener("submit", (e)=>{ e.preventDefault(); addQuest(); });
 el("addQuestBtn").addEventListener("click", (e)=>{ e.preventDefault(); addQuest(); });
 el("questDesc").addEventListener("keydown", (e)=>{
   if((e.ctrlKey||e.metaKey) && e.key==="Enter"){ e.preventDefault(); addQuest(); }
 });
 
-/* Other quest tools */
+// Other quest tools
 el("markAllDoneBtn").onclick = markAllDone;
 el("purgeDoneBtn").onclick = purgeDone;
 
+// Manual import/export
 el("exportBtn").onclick = exportJSON;
 el("importFile").onchange = (e)=>{ const f=e.target.files?.[0]; if(!f) return; readAndImportFile(f); };
-el("clearAllBtn").onclick = ()=>{ if(confirm("Clear all data?")){ localStorage.removeItem(STORAGE_KEY); state=defaultState(); save(); render(); } };
+el("clearAllBtn").onclick = ()=>{ if(confirm("Clear all data?")){ localStorage.removeItem(STORAGE_KEY); state=load(); save(); render(); } };
+
+// Load any saved GH config
+loadGhFromLocal();
 
 /* ============ Add Quest logic (robust) ============ */
 function addQuest(){
