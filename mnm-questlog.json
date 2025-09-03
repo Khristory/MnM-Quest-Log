@@ -4,7 +4,16 @@
       "id": "tbl9pcp",
       "title": "Main Character",
       "open": true,
-      "quests": [],
+      "quests": [
+        {
+          "id": "qdkz6fr",
+          "name": "test",
+          "desc": "test 1",
+          "done": false,
+          "open": true,
+          "editing": false
+        }
+      ],
       "children": []
     }
   ],
