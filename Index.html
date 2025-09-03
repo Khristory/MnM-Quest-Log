@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Monsters & Memories — Quest Log (Mobile Share + Paste Import)</title>
+<title>Monsters & Memories — Quest Log (Add Quest Fix + Inline Editor)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root{
@@ -126,10 +126,7 @@
       <div class="card" style="margin-top:8px">
         <button id="exportBtn" class="btn secondary" style="width:100%">Export (JSON)</button>
         <input id="importFile" type="file" accept=".json,.txt" class="input" />
-        <button id="pasteToggleBtn" class="btn secondary" style="width:100%">Paste Import</button>
-        <textarea id="pasteBox" class="textarea" placeholder="Paste JSON here" style="display:none;margin-top:6px"></textarea>
-        <button id="pasteLoadBtn" class="btn success" style="display:none;width:100%">Load Pasted JSON</button>
-        <button id="clearAllBtn" class="btn danger" style="width:100%; margin-top:6px">Clear All</button>
+        <button id="clearAllBtn" class="btn danger" style="width:100%">Clear All</button>
       </div>
     </div>
   </aside>
@@ -143,7 +140,6 @@
           <button id="connectFileBtn" class="btn main">Connect File</button>
           <button id="createFileBtn" class="btn secondary">Create File</button>
           <button id="saveBtn" class="btn success" title="Ctrl/Cmd+S">Save</button>
-          <button id="shareBtn" class="btn secondary" title="Share or copy JSON (best on phones)">Share</button>
         </div>
       </div>
       <div id="fsWarning" class="subtle" style="display:none"></div>
@@ -223,33 +219,6 @@ async function hardSave(){
   if(fileHandle && supportsFS && secureOK){ try{ if(await ensurePermission()){ await writeToHandle(fileHandle); setStatus(`Saved to: ${fileHandle.name}`); stampSaved("connected file", fileHandle.name); return; } }catch(e){} }
   if(supportsFS && secureOK){ try{ const handle=await window.showSaveFilePicker({ suggestedName:(fileHandle?.name)||"mnm-questlog.json", types:[{description:"JSON", accept:{ "application/json":[".json"] }}] }); await writeToHandle(handle); fileHandle=handle; setStatus(`Saved to: ${fileHandle.name}`); stampSaved("Save As", fileHandle.name); return; }catch(e){} }
   const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=(fileHandle?.name)||"mnm-questlog.json"; a.click(); setStatus("Downloaded JSON"); stampSaved("download");
-}
-
-/* ======= Mobile-friendly Share / Copy JSON ======= */
-async function shareJSON(){
-  const json = JSON.stringify(state, null, 2);
-  const blob = new Blob([json], {type:"application/json"});
-  const file = new File([blob], "mnm-questlog.json", {type:"application/json"});
-
-  try{
-    if(navigator.canShare && navigator.canShare({ files:[file] })){
-      await navigator.share({ files:[file], title:"Quest Log", text:"Monsters & Memories quest log" });
-      setStatus("Shared JSON"); stampSaved("share");
-      return;
-    }
-  }catch(e){ /* fall through */ }
-
-  // Fallback: copy to clipboard
-  try{
-    await navigator.clipboard.writeText(json);
-    setStatus("Copied JSON to clipboard"); stampSaved("clipboard");
-    return;
-  }catch(e){ /* fall through */ }
-
-  // Final fallback: download
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob); a.download="mnm-questlog.json"; a.click();
-  setStatus("Downloaded JSON"); stampSaved("download");
 }
 
 /* ================== Tree helpers ================== */
@@ -441,25 +410,20 @@ function deleteNode(){
   save(); render();
 }
 
-/* ================== Import/Export helpers ================== */
+/* ================== Import/Export ================== */
 function exportJSON(){ const blob=new Blob([JSON.stringify(state,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="mnm-questlog.json"; a.click(); }
 async function readAndImportFile(file){
   const text=await file.text();
-  await importFromText(text);
-}
-async function importFromText(text){
   try{
     const data=JSON.parse(text);
     if(Array.isArray(data.tree)){
-      state = data;                  // full state
+      const titles=new Set(state.tree.map(n=>n.title));
+      for(const n of data.tree){ if(!titles.has(n.title)) state.tree.push(n); }
     }else if(Array.isArray(data.sections)){
-      state={ tree:data.sections.map(s=>({id:uid(),title:s.title||"Untitled",open:true,quests:s.quests||[],children:[] })), selectedNodeId:null };
-      state.selectedNodeId = state.tree[0]?.id || null;
+      for(const sec of data.sections){ state.tree.push({ id:uid(), title:sec.title||"Untitled", open:true, quests:sec.quests||[], children:[] }); }
     }else if(Array.isArray(data.quests)){
       const node=currentNode() || (state.tree[0]??null);
       if(node){ node.quests=node.quests||[]; for(const q of data.quests){ node.quests.push({ id:uid(), name:q.name||q.title||"", desc:q.desc||q.description||"", done:!!q.done, open:false, editing:false }); } }
-    }else{
-      throw new Error("Unrecognized JSON shape");
     }
   }catch{
     const node=currentNode() || (state.tree[0]??null);
@@ -471,7 +435,7 @@ async function importFromText(text){
   save(); render();
 }
 
-/* ================== Connect / Create / Save / Share ================== */
+/* ================== Connect / Create / Save ================== */
 el("connectFileBtn").onclick=async ()=>{
   let handle=null, file=null;
   if(supportsFS){ try{ const [h]=await window.showOpenFilePicker({ types:[{ description:"JSON or Text", accept:{ "application/json":[".json"], "text/plain":[".txt"], "application/octet-stream":[".*"] } }], excludeAcceptAllOption:false, multiple:false }); handle=h; file=await h.getFile(); }catch(e){} }
@@ -487,8 +451,8 @@ el("connectFileBtn").onclick=async ()=>{
     else if(Array.isArray(data.sections)){
       state={ tree:data.sections.map(s=>({id:uid(),title:s.title||"Untitled",open:true,quests:s.quests||[],children:[] })), selectedNodeId:null };
       state.selectedNodeId = state.tree[0]?.id || null;
-    }else{ await importFromText(text); }
-  }catch{ await importFromText(text); }
+    }else{ await readAndImportFile(new File([text], file.name, {type:file.type})); }
+  }catch{ await readAndImportFile(new File([text], file.name, {type:file.type})); }
   save(); render();
 
   if(handle && supportsFS && secureOK){
@@ -498,7 +462,7 @@ el("connectFileBtn").onclick=async ()=>{
   }else{
     fileHandle=null; setStatus(`Loaded (read-only): ${file.name}`);
     if(supportsFS && !secureOK){ warnFS("To save back to the file, open via http://localhost or HTTPS."); }
-    else if(!supportsFS){ warnFS("Your browser doesn’t support direct file saving. Use Save/Share/Export."); }
+    else if(!supportsFS){ warnFS("Your browser doesn’t support direct file saving. Use Save (download) or Export."); }
     else { warnFS(""); }
   }
 };
@@ -511,7 +475,6 @@ el("createFileBtn").onclick=async ()=>{
   }catch(e){}
 };
 el("saveBtn").onclick = hardSave;
-el("shareBtn").onclick = shareJSON;
 window.addEventListener("keydown",(e)=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); hardSave(); }});
 
 /* ================== Wiring ================== */
@@ -542,14 +505,6 @@ el("purgeDoneBtn").onclick = purgeDone;
 
 el("exportBtn").onclick = exportJSON;
 el("importFile").onchange = (e)=>{ const f=e.target.files?.[0]; if(!f) return; readAndImportFile(f); };
-el("pasteToggleBtn").onclick = ()=>{
-  const box=el("pasteBox"), btn=el("pasteLoadBtn");
-  const show = box.style.display!=="block";
-  box.style.display = show?"block":"none";
-  btn.style.display = show?"block":"none";
-  if(show) box.focus();
-};
-el("pasteLoadBtn").onclick = ()=>{ const t=el("pasteBox").value.trim(); if(!t) return; importFromText(t); el("pasteBox").value=""; el("pasteBox").style.display="none"; el("pasteLoadBtn").style.display="none"; };
 el("clearAllBtn").onclick = ()=>{ if(confirm("Clear all data?")){ localStorage.removeItem(STORAGE_KEY); state=defaultState(); save(); render(); } };
 
 /* ============ Add Quest logic (robust) ============ */
