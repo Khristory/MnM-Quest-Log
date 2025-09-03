@@ -1,1 +1,12 @@
-
+{
+  "tree": [
+    {
+      "id": "tbl9pcp",
+      "title": "Main Character",
+      "open": true,
+      "quests": [],
+      "children": []
+    }
+  ],
+  "selectedNodeId": "tbl9pcp"
+}
