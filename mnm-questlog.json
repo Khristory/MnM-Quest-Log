@@ -22,7 +22,30 @@
           ]
         }
       ]
+    },
+    {
+      "id": "wdsg3bh",
+      "title": "Spellblade",
+      "open": true,
+      "quests": [],
+      "children": [
+        {
+          "id": "z047mo1",
+          "title": "Night Harbor/Shaded Dunes",
+          "open": true,
+          "quests": [],
+          "children": [
+            {
+              "id": "umb414p",
+              "title": "Class Quests",
+              "open": true,
+              "quests": [],
+              "children": []
+            }
+          ]
+        }
+      ]
     }
   ],
-  "selectedNodeId": "h1icx62"
+  "selectedNodeId": "umb414p"
 }
